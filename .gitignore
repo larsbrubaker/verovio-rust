@@ -1,0 +1,14 @@
+/target
+Cargo.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Claude Code / Cursor agent state
+.claude/
+.cursor/

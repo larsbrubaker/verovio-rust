@@ -1,0 +1,3 @@
+[submodule "verovio-cpp-reference"]
+	path = verovio-cpp-reference
+	url = https://github.com/rism-digital/verovio.git

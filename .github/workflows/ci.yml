@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout verovio-rust
+        uses: actions/checkout@v4
+        with:
+          path: verovio-rust
+
+      # Cargo.toml patches agg-gui to ../agg-gui/agg-gui, so CI needs the
+      # sibling layout.
+      - name: Checkout sibling agg-gui (path-patched in Cargo.toml)
+        uses: actions/checkout@v4
+        with:
+          repository: larsbrubaker/agg-gui
+          path: agg-gui
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            verovio-rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('verovio-rust/Cargo.toml') }}
+
+      - name: Build
+        working-directory: verovio-rust
+        run: cargo build
+
+      - name: Run tests
+        working-directory: verovio-rust
+        run: cargo test
+
+      - name: Clippy
+        working-directory: verovio-rust
+        run: cargo clippy --all-targets -- -D warnings

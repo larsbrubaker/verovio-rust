@@ -1,0 +1,28 @@
+[package]
+name = "verovio-rust"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+authors = ["Lars Brubaker <larsbrubaker@matterhackers.com>"]
+license = "LGPL-3.0-or-later"
+repository = "https://github.com/larsbrubaker/verovio-rust"
+description = "A Rust port of Verovio music engraving, rendering through agg-gui."
+
+[lib]
+name = "verovio_rust"
+crate-type = ["rlib"]
+
+[dependencies]
+agg-gui = "0.2"
+quick-xml = "0.36"
+
+# ---------------------------------------------------------------------------
+# Local development override — the rust-apps superproject lays out agg-gui as
+# a sibling at ../agg-gui/. CI clones it the same way so this patch resolves
+# both locally and in Actions.
+# ---------------------------------------------------------------------------
+[patch.crates-io]
+agg-gui = { path = "../agg-gui/agg-gui" }
+
+[profile.dev.package."*"]
+opt-level = 2
