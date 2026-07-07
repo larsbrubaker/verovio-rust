@@ -269,3 +269,70 @@ fn renders_through_software_gfx_ctx() {
         "engraving should ink a meaningful number of pixels, got {inked}"
     );
 }
+
+/// Diagnostic: render to a PNG for eyeballing glyph extents
+/// (`cargo test dump_render -- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn dump_render() {
+    let mut toolkit = Toolkit::new();
+    toolkit.load_music_xml(&simple_xml(FOUR_QUARTERS)).unwrap();
+    let (width, height) = {
+        let layout = toolkit.layout(&LayoutOptions::default());
+        (layout.width.ceil() as usize, layout.height.ceil() as usize)
+    };
+    let mut framebuffer =
+        agg_gui::framebuffer::Framebuffer::new(width as u32, height as u32);
+    let mut ctx = agg_gui::gfx_ctx::GfxCtx::new(&mut framebuffer);
+    agg_gui::draw_ctx::DrawCtx::clear(&mut ctx, agg_gui::color::Color::white());
+    let font = verovio_rust::leipzig_font();
+    toolkit.render(
+        &mut ctx,
+        &font,
+        0.0,
+        height as f64,
+        &verovio_rust::RenderOptions::default(),
+    );
+    drop(ctx);
+
+    // Minimal PPM dump (framebuffer is RGBA, y-up rows).
+    let mut out = format!("P6\n{width} {height}\n255\n").into_bytes();
+    let px = framebuffer.pixels();
+    for y in (0..height).rev() {
+        for x in 0..width {
+            let i = (y * width + x) * 4;
+            out.extend_from_slice(&px[i..i + 3]);
+        }
+    }
+    let path = std::env::temp_dir().join("verovio_dump.ppm");
+    std::fs::write(&path, out).unwrap();
+    println!("wrote {}", path.display());
+}
+
+/// The LCD text rasterizer must size its mask from real glyph outline
+/// extents, not the font's ascender/descender — SMuFL glyphs like the
+/// treble clef deliberately overflow the em box and were cropped flat
+/// on GPU backends (the "clipped clef" bug).
+#[test]
+fn lcd_mask_covers_full_clef_extent() {
+    let font = verovio_rust::leipzig_font();
+    let size = 40.0;
+    let clef = "\u{E050}"; // gClef
+    let (y_min, y_max) = font
+        .glyph_visual_bounds('\u{E050}', size)
+        .expect("clef outline");
+    let mask = agg_gui::lcd_coverage::rasterize_text_lcd_cached(&font, clef, size);
+    let ink_height = y_max - y_min;
+    assert!(
+        (mask.height as f64) >= ink_height,
+        "mask height {} must cover the clef outline height {ink_height}",
+        mask.height
+    );
+    // And the baseline must sit deep enough that the tail isn't cut.
+    assert!(
+        mask.baseline_y_in_mask >= -y_min,
+        "baseline offset {} must clear the clef descender {}",
+        mask.baseline_y_in_mask,
+        -y_min
+    );
+}
