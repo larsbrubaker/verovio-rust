@@ -336,3 +336,111 @@ fn lcd_mask_covers_full_clef_extent() {
         -y_min
     );
 }
+
+/// Build a many-measure single-voice score (`count` measures of four
+/// quarters each).
+fn long_xml(count: usize) -> String {
+    let mut measures = String::new();
+    for number in 1..=count {
+        let attributes = if number == 1 {
+            r#"<attributes>
+        <divisions>2</divisions>
+        <key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>"#
+        } else {
+            ""
+        };
+        measures.push_str(&format!(
+            r#"<measure number="{number}">{attributes}
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>2</duration><type>quarter</type></note>
+      <note><pitch><step>D</step><octave>4</octave></pitch><duration>2</duration><type>quarter</type></note>
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>2</duration><type>quarter</type></note>
+      <note><pitch><step>F</step><octave>4</octave></pitch><duration>2</duration><type>quarter</type></note>
+    </measure>"#
+        ));
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">{measures}</part>
+</score-partwise>"#
+    )
+}
+
+/// `system_width` wraps measures into rows: the layout stays inside the
+/// width, grows in height, keeps every note addressable, and puts later
+/// measures on lower systems.
+#[test]
+fn system_width_wraps_long_scores_into_rows() {
+    let mut toolkit = Toolkit::new();
+    toolkit.load_music_xml(&long_xml(12)).unwrap();
+
+    let single_height = toolkit.layout(&LayoutOptions::default()).height;
+    let single_width = toolkit.layout(&LayoutOptions::default()).width;
+    assert!(single_width > 800.0, "12 measures overflow one system");
+
+    let options = LayoutOptions {
+        system_width: Some(800.0),
+        ..LayoutOptions::default()
+    };
+    let layout = toolkit.layout(&options);
+    assert!(
+        layout.width <= 800.0,
+        "wrapped width {} stays inside the system width",
+        layout.width
+    );
+    assert!(
+        layout.height > single_height * 2.0,
+        "wrapping stacks systems ({} vs single {single_height})",
+        layout.height
+    );
+
+    // Every note keeps queryable bounds, and the last measure's notes sit
+    // on a lower system than the first measure's.
+    let ids: Vec<String> = layout
+        .timemap
+        .iter()
+        .flat_map(|m| m.note_ids.clone())
+        .collect();
+    assert_eq!(ids.len(), 48);
+    let first = layout.bounds_by_id[&ids[0]];
+    let last = layout.bounds_by_id[ids.last().unwrap()];
+    assert!(
+        last.1 > first.1 + 100.0,
+        "later measures wrap to lower rows ({} vs {})",
+        last.1,
+        first.1
+    );
+
+    // Clefs repeat on every system; the time signature only opens the first.
+    let systems = layout
+        .elements
+        .iter()
+        .filter(|e| e.kind == ElementKind::Clef)
+        .count();
+    assert!(systems > 1, "clef repeats per system");
+    let time_sigs = layout
+        .elements
+        .iter()
+        .filter(|e| e.kind == ElementKind::TimeSignature)
+        .count();
+    assert_eq!(time_sigs, 2, "time signature (two digits) only on system 1");
+}
+
+/// Without `system_width` the engraving is byte-for-byte the single
+/// endless system it always was.
+#[test]
+fn no_system_width_keeps_one_system() {
+    let mut toolkit = Toolkit::new();
+    toolkit.load_music_xml(&long_xml(12)).unwrap();
+    let layout = toolkit.layout(&LayoutOptions::default());
+    let clefs = layout
+        .elements
+        .iter()
+        .filter(|e| e.kind == ElementKind::Clef)
+        .count();
+    assert_eq!(clefs, 1, "single system, single clef");
+}

@@ -72,6 +72,11 @@ pub struct LayoutOptions {
     pub staff_space: f64,
     /// Left/right/top margins around the system, px.
     pub margin: f64,
+    /// Wrap measures into a new system (row) when the next measure would
+    /// cross this width — Verovio's page-width line breaking
+    /// (`src/layoutengine` cast-off) reduced to the greedy measure fill.
+    /// `None` engraves one endless system.
+    pub system_width: Option<f64>,
 }
 
 impl Default for LayoutOptions {
@@ -79,6 +84,7 @@ impl Default for LayoutOptions {
         Self {
             staff_space: 10.0,
             margin: 24.0,
+            system_width: None,
         }
     }
 }
@@ -166,6 +172,12 @@ struct Engraver<'a> {
     staves: Vec<StaffGeometry>,
     out: Layout,
     glyph_size: f64,
+    /// Wrap threshold (see [`LayoutOptions::system_width`]).
+    system_width: Option<f64>,
+    /// Staff-line left edge of the system being filled.
+    system_left: f64,
+    /// Measures placed in the system being filled.
+    measures_in_system: usize,
 }
 
 impl<'a> Engraver<'a> {
@@ -195,6 +207,9 @@ impl<'a> Engraver<'a> {
             out: Layout::default(),
             // SMuFL convention: 1 em = 4 staff spaces.
             glyph_size: 4.0 * sp,
+            system_width: options.system_width,
+            system_left: margin,
+            measures_in_system: 0,
         }
     }
 
@@ -253,21 +268,75 @@ impl<'a> Engraver<'a> {
     }
 
     fn run(mut self) -> Layout {
-        let mut x = self.margin;
+        let measures = self.score.measures.clone();
+        let barline_advance = 0.4 * self.sp;
 
+        let mut x = self.begin_system(true);
+        let mut widest = x;
+        for measure in &measures {
+            // Greedy cast-off: break BEFORE a measure that would cross the
+            // system width (never mid-measure — ties/beams stay intact).
+            if let Some(max_width) = self.system_width {
+                let projected = x + self.measure_width(measure) + barline_advance + self.margin;
+                if self.measures_in_system > 0 && projected > max_width {
+                    self.end_system(x);
+                    widest = widest.max(x);
+                    self.next_system_row();
+                    x = self.begin_system(false);
+                }
+            }
+            x = self.draw_measure(measure, x);
+            // Measure barline across the system.
+            let top = self.staves[0].top;
+            let bottom = self.staves.last().unwrap().bottom();
+            let thickness = (self.sp * 0.12).max(1.0);
+            self.push(
+                ElementKind::Barline,
+                None,
+                Primitive::Line { x1: x, y1: top, x2: x, y2: bottom, thickness },
+                (x - thickness / 2.0, top, thickness, bottom - top),
+            );
+            x += barline_advance;
+            self.measures_in_system += 1;
+        }
+        self.end_system(x);
+        widest = widest.max(x);
+        self.finish(widest)
+    }
+
+    /// Open a system at the left margin: brace, clefs, key signature — and
+    /// the time signature on the first system only (engraving convention).
+    /// Returns the x where the first measure starts.
+    fn begin_system(&mut self, first: bool) -> f64 {
+        self.measures_in_system = 0;
+        let mut x = self.margin;
         if self.score.staves == 2 {
             x += self.draw_brace(x);
         }
-        let system_left = x;
+        self.system_left = x;
         x += self.draw_clefs(x);
         x += self.draw_key_signature(x);
-        x += self.draw_time_signature(x);
-        x += self.sp; // breathing room before the first note
+        if first {
+            x += self.draw_time_signature(x);
+        }
+        x + self.sp // breathing room before the first note
+    }
 
-        let x = self.draw_measures(x);
+    /// Close the system being filled: staff lines + opening barline.
+    fn end_system(&mut self, right: f64) {
+        let brace_inset = if self.score.staves == 2 { 1.2 * self.sp } else { 0.0 };
+        self.draw_staff_lines(self.system_left - brace_inset, right);
+    }
 
-        self.draw_staff_lines(system_left - if self.score.staves == 2 { 1.2 * self.sp } else { 0.0 }, x);
-        self.finish(x)
+    /// Move the staff grid down one system row.
+    fn next_system_row(&mut self) {
+        // Below-ledger room for this row + above-ledger room for the next
+        // + a two-space system gap.
+        let stride =
+            self.staves.last().unwrap().bottom() - self.staves[0].top + 8.0 * self.sp;
+        for staff in &mut self.staves {
+            staff.top += stride;
+        }
     }
 
     fn finish(mut self, right: f64) -> Layout {
@@ -384,31 +453,15 @@ impl<'a> Engraver<'a> {
         2.4 * self.sp
     }
 
-    fn draw_measures(&mut self, mut x: f64) -> f64 {
-        let measures = self.score.measures.clone();
-        for measure in &measures {
-            x = self.draw_measure(measure, x);
-            // Measure barline across the system.
-            let top = self.staves[0].top;
-            let bottom = self.staves.last().unwrap().bottom();
-            let thickness = (self.sp * 0.12).max(1.0);
-            self.push(
-                ElementKind::Barline,
-                None,
-                Primitive::Line { x1: x, y1: top, x2: x, y2: bottom, thickness },
-                (x - thickness / 2.0, top, thickness, bottom - top),
-            );
-            x += 0.4 * self.sp;
-        }
-        x
-    }
-
-    /// Engrave one measure: merge both voices' onsets into shared columns
-    /// (chords across staves align), then place each voice's events.
-    fn draw_measure(&mut self, measure: &crate::score::Measure, x_start: f64) -> f64 {
-        // Column x per onset: linear duration spacing.
-        // v0: Verovio uses non-linear spacing (`src/alignfunctor.cpp`);
-        // linear reads fine for short exercises.
+    /// Column x per onset for one measure: linear duration spacing.
+    /// v0: Verovio uses non-linear spacing (`src/alignfunctor.cpp`);
+    /// linear reads fine for short exercises. Returns the columns and the
+    /// measure's right edge.
+    fn measure_columns(
+        &self,
+        measure: &crate::score::Measure,
+        x_start: f64,
+    ) -> (HashMap<i32, f64>, f64) {
         let mut onsets: Vec<i32> = measure
             .voices
             .iter()
@@ -440,7 +493,18 @@ impl<'a> Engraver<'a> {
             .unwrap_or(2);
         let right = column_x.get(&last_onset).copied().unwrap_or(x_start)
             + (1.4 + 0.85 * longest_last as f64) * self.sp;
+        (column_x, right)
+    }
 
+    /// A measure's width, for cast-off decisions before drawing it.
+    fn measure_width(&self, measure: &crate::score::Measure) -> f64 {
+        self.measure_columns(measure, 0.0).1
+    }
+
+    /// Engrave one measure: merge both voices' onsets into shared columns
+    /// (chords across staves align), then place each voice's events.
+    fn draw_measure(&mut self, measure: &crate::score::Measure, x_start: f64) -> f64 {
+        let (column_x, right) = self.measure_columns(measure, x_start);
         for (staff_index, voice) in measure.voices.iter().enumerate() {
             if staff_index >= self.staves.len() {
                 continue;
