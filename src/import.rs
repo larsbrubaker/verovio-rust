@@ -209,6 +209,10 @@ pub fn parse_music_xml(data: &[u8]) -> Result<Score, ImportError> {
         }
 
         let mut out = Measure::default();
+        // <chord/> members attach to the immediately preceding note in
+        // document order, even when their <staff> differs (cross-staff
+        // chords). v0: such members engrave on the anchor's staff.
+        let mut last_event_voice: Option<usize> = None;
         for note_element in measure.elements("note") {
             if divisions <= 0 {
                 return Err(ImportError::Unsupported("missing divisions".into()));
@@ -220,6 +224,7 @@ pub fn parse_music_xml(data: &[u8]) -> Result<Score, ImportError> {
                 &mut voice_units,
                 &mut next_note_id,
                 &mut next_rest_id,
+                &mut last_event_voice,
             )?;
         }
         score_measures.push(out);
@@ -234,6 +239,7 @@ pub fn parse_music_xml(data: &[u8]) -> Result<Score, ImportError> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_note_into(
     element: &Element,
     divisions: i32,
@@ -241,6 +247,7 @@ fn parse_note_into(
     voice_units: &mut [i32; 2],
     next_note_id: &mut usize,
     next_rest_id: &mut usize,
+    last_event_voice: &mut Option<usize>,
 ) -> Result<(), ImportError> {
     if element.first("grace").is_some() {
         return Err(ImportError::Unsupported("grace notes".into()));
@@ -273,18 +280,17 @@ fn parse_note_into(
         return Err(ImportError::Unsupported("note values outside eighth–whole".into()));
     };
 
-    let voice = &mut measure.voices[staff_index];
-
     if element.first("rest").is_some() {
         let id = format!("rest-{}", *next_rest_id);
         *next_rest_id += 1;
-        voice.push(Event {
+        measure.voices[staff_index].push(Event {
             onset_units: voice_units[staff_index],
             duration,
             notes: Vec::new(),
             rest_id: Some(id),
         });
         voice_units[staff_index] += duration.total_units();
+        *last_event_voice = Some(staff_index);
         return Ok(());
     }
 
@@ -324,18 +330,22 @@ fn parse_note_into(
     };
 
     if is_chord_member {
-        let event = voice
+        // Cross-staff members join their document-order anchor's event.
+        let anchor_voice = last_event_voice
+            .ok_or_else(|| ImportError::Unsupported("chord member without anchor".into()))?;
+        let event = measure.voices[anchor_voice]
             .last_mut()
             .ok_or_else(|| ImportError::Unsupported("chord member without anchor".into()))?;
         event.notes.push(note);
     } else {
-        voice.push(Event {
+        measure.voices[staff_index].push(Event {
             onset_units: voice_units[staff_index],
             duration,
             notes: vec![note],
             rest_id: None,
         });
         voice_units[staff_index] += duration.total_units();
+        *last_event_voice = Some(staff_index);
     }
     Ok(())
 }
