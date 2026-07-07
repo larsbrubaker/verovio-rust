@@ -104,6 +104,24 @@ impl Toolkit {
         self.layout.as_ref()?.bounds_by_id.get(id).copied()
     }
 
+    /// MIDI pitch of a note element id, from the loaded score's own model —
+    /// the C++ toolkit's `getMIDIValuesForElement` reduced to pitch.
+    pub fn note_midi(&self, id: &str) -> Option<u8> {
+        let score = self.score.as_ref()?;
+        for measure in &score.measures {
+            for voice in &measure.voices {
+                for event in voice {
+                    for note in &event.notes {
+                        if note.id == id {
+                            return Some(note.pitch.midi());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Timemap: every onset moment with its sounding note ids, document
     /// order (treble voice then bass) — Verovio's `renderToTimemap`
     /// reduced to onset units.

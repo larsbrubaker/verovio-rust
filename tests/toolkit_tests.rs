@@ -85,6 +85,15 @@ fn note_ids_are_stable_document_order() {
 }
 
 #[test]
+fn note_midi_reports_the_encoded_pitch() {
+    let mut toolkit = Toolkit::new();
+    toolkit.load_music_xml(&simple_xml(FOUR_QUARTERS)).unwrap();
+    assert_eq!(toolkit.note_midi("note-0"), Some(60));
+    assert_eq!(toolkit.note_midi("note-3"), Some(65));
+    assert_eq!(toolkit.note_midi("note-99"), None);
+}
+
+#[test]
 fn noteheads_have_queryable_bounds_in_reading_order() {
     let mut toolkit = Toolkit::new();
     toolkit.load_music_xml(&simple_xml(FOUR_QUARTERS)).unwrap();
