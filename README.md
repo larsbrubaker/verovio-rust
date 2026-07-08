@@ -7,7 +7,7 @@ subset completely — with per-element ids, bounds lookup, color overrides,
 and an onset timemap — and rejects anything it can't engrave faithfully.
 
 Built as the notation engine for
-[keyinsight-rust](https://github.com/larsbrubaker/keyinsight-rust); useful
+[KeyInSight](https://github.com/larsbrubaker/KeyInSight); useful
 to any agg-gui app that needs staff notation.
 
 ## License
